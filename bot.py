@@ -2,7 +2,8 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-TOKEN = "8800374629:AAGrSBvsTbJI3d2pYYNYc-2HByvU9iU4GgQ"
+# Берем токен из переменной окружения (для Railway)
+TOKEN = os.getenv("TOKEN")
 
 # Файлы
 ORDERS_FILE = "zayavki.txt"   # Заявки (доходы)
@@ -26,44 +27,30 @@ def read_file(filename):
     except FileNotFoundError:
         return ""
 
-# Функция для автоматического подсчета итогов
+# Расчет итогов
 def calculate_totals():
     orders_text = read_file(ORDERS_FILE)
     expenses_text = read_file(EXPENSES_FILE)
-    
     total_income = 0
     total_expenses = 0
 
+    # Подсчет доходов из заявок
     if orders_text:
         for line in orders_text.splitlines():
             parts = line.split("|")
             for part in parts:
-                if "Доход" in part:
+                if "Сумма" in part:
                     try:
                         total_income += int(part.split(":")[1].strip())
                     except:
                         pass
 
+    # Подсчет расходов (просто общая сумма)
     if expenses_text:
         for line in expenses_text.splitlines():
             parts = line.split("|")
             for part in parts:
-                if "Бензин" in part:
-                    try:
-                        total_expenses += int(part.split(":")[1].strip())
-                    except:
-                        pass
-                if "Запчасти" in part:
-                    try:
-                        total_expenses += int(part.split(":")[1].strip())
-                    except:
-                        pass
-                if "Еда" in part:
-                    try:
-                        total_expenses += int(part.split(":")[1].strip())
-                    except:
-                        pass
-                if "Процент" in part:
+                if "Расход" in part:
                     try:
                         total_expenses += int(part.split(":")[1].strip())
                     except:
@@ -77,7 +64,6 @@ user_data = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🚚 Создать заявку", callback_data="new")],
-        [InlineKeyboardButton("✏️ Редактировать заявку", callback_data="edit")],
         [InlineKeyboardButton("💰 Заполнить расходы", callback_data="expenses")],
         [InlineKeyboardButton("📊 Отчет", callback_data="report")],
         [InlineKeyboardButton("🗑️ Очистить отчет", callback_data="clear")]
@@ -90,19 +76,33 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if query.data == "new":
-        user_data[user_id] = {"type": "order"}
-        await query.edit_message_text(text="📅 Введите дату и время (например: 15.10 14:30):")
-    elif query.data == "edit":
-        user_data[user_id] = {"type": "edit"}
-        await query.edit_message_text(text="✏️ Введите номер заявки, которую хотите редактировать (например: 1):")
+        # Меню выбора техники
+        keyboard = [
+            [InlineKeyboardButton("🌀 Стиральная машинка", callback_data="tech_wash")],
+            [InlineKeyboardButton("❄️ Холодильник", callback_data="tech_fridge")],
+            [InlineKeyboardButton("🍽️ Посудомойка", callback_data="tech_dish")],
+            [InlineKeyboardButton("📦 Прочее", callback_data="tech_other")]
+        ]
+        await query.edit_message_text(
+            text="🛠️ Выберите тип техники:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif query.data.startswith("tech_"):
+        tech_names = {
+            "tech_wash": "🌀 Стиральная машинка",
+            "tech_fridge": "❄️ Холодильник",
+            "tech_dish": "🍽️ Посудомойка",
+            "tech_other": "📦 Прочее"
+        }
+        user_data[user_id] = {"type": "order", "tech": tech_names[query.data]}
+        await query.edit_message_text(text="📍 Введите адрес:")
     elif query.data == "expenses":
         user_data[user_id] = {"type": "expense"}
-        await query.edit_message_text(text="📅 Введите дату для расходов (например: 15.10):")
+        await query.edit_message_text(text="📅 Введите дату расхода (например: 15.10):")
     elif query.data == "report":
         orders = read_file(ORDERS_FILE)
         expenses = read_file(EXPENSES_FILE)
         total_income, total_expenses, profit = calculate_totals()
-        
         await query.edit_message_text(
             text=f"📊 Отчет:\n\n"
                  f"🚚 Заявки:\n{orders}\n\n"
@@ -116,7 +116,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("✅ Да, удалить", callback_data="clear_yes")],
             [InlineKeyboardButton("❌ Нет, оставить", callback_data="clear_no")]
         ]
-        await query.edit_message_text(text="⚠️ Вы уверены, что хотите обнулить (удалить) весь отчет?", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text="⚠️ Вы уверены, что хотите обнулить весь отчет?", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "clear_yes":
         base_dir = os.path.dirname(os.path.abspath(__file__))
         for f in [ORDERS_FILE, EXPENSES_FILE]:
@@ -132,69 +132,41 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if user_id not in user_data:
-        await update.message.reply_text("Пожалуйста, нажмите /start и выберите 'Создать заявку' или 'Заполнить расходы'.")
+        await update.message.reply_text("Пожалуйста, нажмите /start и выберите действие.")
         return
 
     step = len(user_data[user_id])
     user_type = user_data[user_id].get("type")
 
     if user_type == "order":
-        if step == 1:
-            user_data[user_id]["date"] = text
-            await update.message.reply_text("📍 Введите адрес, откуда забрали груз:")
-        elif step == 2:
-            user_data[user_id]["from"] = text
-            await update.message.reply_text("🏁 Введите адрес, куда отвезли груз:")
-        elif step == 3:
-            user_data[user_id]["to"] = text
-            await update.message.reply_text("💰 Введите сумму, которую заработали (доход):")
-        elif step == 4:
+        if step == 2:  # адрес
+            user_data[user_id]["address"] = text
+            await update.message.reply_text("📞 Введите номер телефона:")
+        elif step == 3:  # телефон
+            user_data[user_id]["phone"] = text
+            await update.message.reply_text("🕒 Введите время (например: 14:30):")
+        elif step == 4:  # время
+            user_data[user_id]["time"] = text
+            await update.message.reply_text("💰 Введите сумму, которую забрали (доход):")
+        elif step == 5:  # сумма
             user_data[user_id]["income"] = text
             order_data = user_data.pop(user_id)
-            order_str = f"📅 {order_data['date']} | 🚚 Откуда: {order_data['from']} | 🏁 Куда: {order_data['to']} | 💰 Доход: {order_data['income']}"
+            order_str = (f"📅 {order_data['tech']} | 📍 Адрес: {order_data['address']} | "
+                         f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | "
+                         f"💰 Сумма: {order_data['income']}")
             write_to_file(ORDERS_FILE, order_str)
             await update.message.reply_text(f"✅ Заявка сохранена!\n\n{order_str}\n\nНажмите /start для нового действия.")
 
-    elif user_type == "edit":
-        if step == 1:
-            user_data[user_id]["edit_index"] = text
-            await update.message.reply_text("✏️ Найти и редактировать заявку с этим номером? (Пример: 1)")
-        elif step == 2:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            file_path = os.path.join(base_dir, ORDERS_FILE)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                index = int(user_data[user_id]["edit_index"]) - 1
-                if 0 <= index < len(lines):
-                    lines[index] = text + "\n"
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.writelines(lines)
-                    await update.message.reply_text("✅ Заявка редактирована!")
-                else:
-                    await update.message.reply_text("❌ Заявка с таким номером не существует.")
-            except FileNotFoundError:
-                await update.message.reply_text("❌ Заявок пока нет.")
-
     elif user_type == "expense":
-        if step == 1:
+        if step == 1:  # дата
             user_data[user_id]["date"] = text
-            await update.message.reply_text("⛽ Введите расходы на бензин:")
-        elif step == 2:
-            user_data[user_id]["fuel"] = text
-            await update.message.reply_text("🔧 Введите расходы на запчасти:")
-        elif step == 3:
-            user_data[user_id]["parts"] = text
-            await update.message.reply_text("🍔 Введите расходы на еду:")
-        elif step == 4:
-            user_data[user_id]["food"] = text
-            await update.message.reply_text("💸 Введите процент (например, 50%):")
-        elif step == 5:
-            user_data[user_id]["percent"] = text
+            await update.message.reply_text("💰 Введите сумму расхода:")
+        elif step == 2:  # сумма расхода
+            user_data[user_id]["expense"] = text
             expense_data = user_data.pop(user_id)
-            expense_str = f"📅 {expense_data['date']} | ⛽ Бензин: {expense_data['fuel']} | 🔧 Запчасти: {expense_data['parts']} | 🍔 Еда: {expense_data['food']} | 💸 Процент: {expense_data['percent']}"
+            expense_str = f"📅 {expense_data['date']} | 💰 Расход: {expense_data['expense']}"
             write_to_file(EXPENSES_FILE, expense_str)
-            await update.message.reply_text(f"✅ Расходы сохранены!\n\n{expense_str}\n\nНажмите /start для нового действия.")
+            await update.message.reply_text(f"✅ Расход сохранен!\n\n{expense_str}\n\nНажмите /start для нового действия.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
