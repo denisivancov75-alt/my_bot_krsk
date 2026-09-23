@@ -2,11 +2,9 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# Берем токен из переменной окружения (для Railway)
 TOKEN = os.getenv("TOKEN")
 
-# Файлы
-ORDERS_FILE = "zayavki.txt"   # Заявки (доходы)
+ORDERS_FILE = "zayavki.txt"   # Заявки
 EXPENSES_FILE = "rashody.txt" # Расходы
 
 def write_to_file(filename, text):
@@ -27,25 +25,39 @@ def read_file(filename):
     except FileNotFoundError:
         return ""
 
-# Расчет итогов
+def read_lines(filename):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, filename)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.readlines()
+    except FileNotFoundError:
+        return []
+
+def write_lines(filename, lines):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, filename)
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+# Расчет итогов (только закрытые заявки)
 def calculate_totals():
     orders_text = read_file(ORDERS_FILE)
     expenses_text = read_file(EXPENSES_FILE)
     total_income = 0
     total_expenses = 0
 
-    # Подсчет доходов из заявок
     if orders_text:
         for line in orders_text.splitlines():
-            parts = line.split("|")
-            for part in parts:
-                if "Сумма" in part:
-                    try:
-                        total_income += int(part.split(":")[1].strip())
-                    except:
-                        pass
+            if "🟢" in line:  # только закрытые
+                parts = line.split("|")
+                for part in parts:
+                    if "Сумма" in part:
+                        try:
+                            total_income += int(part.split(":")[1].strip())
+                        except:
+                            pass
 
-    # Подсчет расходов (просто общая сумма)
     if expenses_text:
         for line in expenses_text.splitlines():
             parts = line.split("|")
@@ -64,11 +76,12 @@ user_data = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🚚 Создать заявку", callback_data="new")],
+        [InlineKeyboardButton("✅ Закрыть заявку", callback_data="close_order")],
         [InlineKeyboardButton("💰 Заполнить расходы", callback_data="expenses")],
         [InlineKeyboardButton("📊 Отчет", callback_data="report")],
         [InlineKeyboardButton("🗑️ Очистить отчет", callback_data="clear")]
     ]
-    await update.message.reply_text("🤖 Бот учета грузоперевозок", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🤖 Бот учета заявок", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -76,29 +89,26 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if query.data == "new":
-        # Меню выбора техники
-        keyboard = [
-            [InlineKeyboardButton("🌀 Стиральная машинка", callback_data="tech_wash")],
-            [InlineKeyboardButton("❄️ Холодильник", callback_data="tech_fridge")],
-            [InlineKeyboardButton("🍽️ Посудомойка", callback_data="tech_dish")],
-            [InlineKeyboardButton("📦 Прочее", callback_data="tech_other")]
-        ]
-        await query.edit_message_text(
-            text="🛠️ Выберите тип техники:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    elif query.data.startswith("tech_"):
-        tech_names = {
-            "tech_wash": "🌀 Стиральная машинка",
-            "tech_fridge": "❄️ Холодильник",
-            "tech_dish": "🍽️ Посудомойка",
-            "tech_other": "📦 Прочее"
-        }
-        user_data[user_id] = {"type": "order", "tech": tech_names[query.data]}
-        await query.edit_message_text(text="📍 Введите адрес:")
+        user_data[user_id] = {"type": "order"}
+        await query.edit_message_text(text="👤 Введите имя клиента:")
+    elif query.data == "close_order":
+        # Показываем список открытых заявок
+        lines = read_lines(ORDERS_FILE)
+        open_orders = []
+        for i, line in enumerate(lines):
+            if "🟡" in line:
+                open_orders.append((i, line.strip()))
+        if not open_orders:
+            await query.edit_message_text(text="📭 Нет открытых заявок.")
+            return
+        user_data[user_id] = {"type": "close", "open_orders": open_orders}
+        text = "📋 Выберите заявку для закрытия (введите её номер):\n\n"
+        for num, (idx, line) in enumerate(open_orders, start=1):
+            text += f"{num}. {line}\n\n"
+        await query.edit_message_text(text=text)
     elif query.data == "expenses":
         user_data[user_id] = {"type": "expense"}
-        await query.edit_message_text(text="📅 Введите дату расхода (например: 15.10):")
+        await query.edit_message_text(text="📅 Введите дату расхода:")
     elif query.data == "report":
         orders = read_file(ORDERS_FILE)
         expenses = read_file(EXPENSES_FILE)
@@ -123,9 +133,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_path = os.path.join(base_dir, f)
             if os.path.exists(file_path):
                 os.remove(file_path)
-        await query.edit_message_text(text="✅ Отчет успешно обнулен. Данные удалены.")
+        await query.edit_message_text(text="✅ Отчет успешно обнулен.")
     elif query.data == "clear_no":
-        await query.edit_message_text(text="✅ Отчет сохранен. Ничего не удалено.")
+        await query.edit_message_text(text="✅ Отчет сохранен.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -135,38 +145,68 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Пожалуйста, нажмите /start и выберите действие.")
         return
 
-    step = len(user_data[user_id])
     user_type = user_data[user_id].get("type")
 
+    # ===== СОЗДАНИЕ ЗАЯВКИ =====
     if user_type == "order":
-        if step == 2:  # адрес
-            user_data[user_id]["address"] = text
-            await update.message.reply_text("📞 Введите номер телефона:")
-        elif step == 3:  # телефон
-            user_data[user_id]["phone"] = text
-            await update.message.reply_text("🕒 Введите время (например: 14:30):")
-        elif step == 4:  # время
-            user_data[user_id]["time"] = text
-            await update.message.reply_text("💰 Введите сумму, которую забрали (доход):")
-        elif step == 5:  # сумма
-            user_data[user_id]["income"] = text
-            order_data = user_data.pop(user_id)
-            order_str = (f"📅 {order_data['tech']} | 📍 Адрес: {order_data['address']} | "
-                         f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | "
-                         f"💰 Сумма: {order_data['income']}")
-            write_to_file(ORDERS_FILE, order_str)
-            await update.message.reply_text(f"✅ Заявка сохранена!\n\n{order_str}\n\nНажмите /start для нового действия.")
+        # Заполняем поля по порядку
+        keys_order = ["name", "address", "phone", "time"]
+        prompts = {
+            "name": "📍 Введите адрес:",
+            "address": "📞 Введите номер телефона:",
+            "phone": "🕒 Введите время прибытия:",
+            "time": "💰 Введите сумму (можно указать 0):"
+        }
 
+        current = user_data[user_id]
+        filled = [k for k in keys_order if k in current]
+
+        if len(filled) < 4:
+            key = keys_order[len(filled)]
+            current[key] = text
+            # Если следующее поле - time, то задаем следующий вопрос
+            filled = [k for k in keys_order if k in current]
+            if len(filled) < 4:
+                next_key = keys_order[len(filled)]
+                await update.message.reply_text(prompts[next_key])
+            else:
+                # Все поля заполнены - сохраняем заявку
+                order_data = user_data.pop(user_id)
+                order_str = (f"🟡 {order_data['name']} | 📍 Адрес: {order_data['address']} | "
+                             f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | "
+                             f"💰 Сумма: 0")
+                write_to_file(ORDERS_FILE, order_str)
+                await update.message.reply_text(f"✅ Заявка создана и открыта!\n\n{order_str}\n\nЕё нужно будет закрыть после выполнения.")
+
+    # ===== ЗАКРЫТИЕ ЗАЯВКИ =====
+    elif user_type == "close":
+        open_orders = user_data[user_id]["open_orders"]
+        try:
+            num = int(text.strip())
+            if 1 <= num <= len(open_orders):
+                line_index, line_text = open_orders[num - 1]
+                user_data[user_id]["selected_index"] = line_index
+                await update.message.reply_text("💰 Введите сумму, которую заработали за эту заявку:")
+            else:
+                await update.message.reply_text("❌ Неверный номер. Попробуйте снова.")
+        except ValueError:
+            await update.message.reply_text("❌ Введите число.")
+
+    elif user_type == "close_sum":
+        # Это состояние должно быть установлено перед запросом суммы
+        pass
+
+    # ===== РАСХОДЫ =====
     elif user_type == "expense":
-        if step == 1:  # дата
+        if "date" not in user_data[user_id]:
             user_data[user_id]["date"] = text
             await update.message.reply_text("💰 Введите сумму расхода:")
-        elif step == 2:  # сумма расхода
+        else:
             user_data[user_id]["expense"] = text
             expense_data = user_data.pop(user_id)
             expense_str = f"📅 {expense_data['date']} | 💰 Расход: {expense_data['expense']}"
             write_to_file(EXPENSES_FILE, expense_str)
-            await update.message.reply_text(f"✅ Расход сохранен!\n\n{expense_str}\n\nНажмите /start для нового действия.")
+            await update.message.reply_text(f"✅ Расход сохранен!\n\n{expense_str}")
 
 def main():
     app = Application.builder().token(TOKEN).build()
