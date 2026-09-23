@@ -4,41 +4,41 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 TOKEN = os.getenv("TOKEN")
 
-ORDERS_FILE = "zayavki.txt"    # Заявки
-EXPENSES_FILE = "rashody.txt"  # Расходы
-INCOME_FILE = "income.txt"     # Внесение денежных средств
+# 👇 Ваш Telegram ID
+MY_CHAT_ID = 5370959021438146805
+
+# Пути к файлам (Railway Volume /data или локальная папка)
+DATA_DIR = "/data"
+if not os.path.exists(DATA_DIR):
+    DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+
+ORDERS_FILE = os.path.join(DATA_DIR, "zayavki.txt")
+EXPENSES_FILE = os.path.join(DATA_DIR, "rashody.txt")
+INCOME_FILE = os.path.join(DATA_DIR, "income.txt")
 
 def write_to_file(filename, text):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, filename)
     try:
-        with open(file_path, "a", encoding="utf-8") as f:
+        with open(filename, "a", encoding="utf-8") as f:
             f.write(text + "\n")
     except Exception as e:
         print(f"Ошибка записи: {e}")
 
 def read_file(filename):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, filename)
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return ""
 
 def read_lines(filename):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, filename)
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             return f.readlines()
     except FileNotFoundError:
         return []
 
 def write_lines(filename, lines):
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(base_dir, filename)
-    with open(file_path, "w", encoding="utf-8") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
 def calculate_totals():
@@ -48,7 +48,6 @@ def calculate_totals():
     total_income = 0
     total_expenses = 0
 
-    # Доход от закрытых заявок 🟢
     if orders_text:
         for line in orders_text.splitlines():
             if "🟢" in line:
@@ -60,7 +59,6 @@ def calculate_totals():
                         except:
                             pass
 
-    # Внесение денег (дополнительный доход)
     if income_text:
         for line in income_text.splitlines():
             parts = line.split("|")
@@ -71,7 +69,6 @@ def calculate_totals():
                     except:
                         pass
 
-    # Расходы
     if expenses_text:
         for line in expenses_text.splitlines():
             parts = line.split("|")
@@ -93,10 +90,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("✅ Закрыть заявку", callback_data="close_order")],
         [InlineKeyboardButton("💵 Внести деньги", callback_data="add_income")],
         [InlineKeyboardButton("💰 Заполнить расходы", callback_data="expenses")],
-        [InlineKeyboardButton("📊 Отчет", callback_data="report")],
-        [InlineKeyboardButton("🗑️ Очистить отчет", callback_data="clear")]
+        [InlineKeyboardButton("📊 Отчет", callback_data="report")]
     ]
-    await update.message.reply_text("🤖 Бот учета заявок", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(
+        "🤖 Бот учета заявок\n\nВыберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -138,30 +137,15 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  f"💰 Расходы:\n{expenses}\n\n"
                  f"💵 Итого заработано: {total_income}\n"
                  f"💸 Итого потрачено: {total_expenses}\n"
-                 f"✅ Чистыми: {profit}"
+                 f"✅ Итого: {profit}"
         )
-    elif query.data == "clear":
-        keyboard = [
-            [InlineKeyboardButton("✅ Да, удалить", callback_data="clear_yes")],
-            [InlineKeyboardButton("❌ Нет, оставить", callback_data="clear_no")]
-        ]
-        await query.edit_message_text(text="⚠️ Удалить весь отчет?", reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data == "clear_yes":
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        for f in [ORDERS_FILE, EXPENSES_FILE, INCOME_FILE]:
-            fp = os.path.join(base_dir, f)
-            if os.path.exists(fp):
-                os.remove(fp)
-        await query.edit_message_text(text="✅ Отчет обнулен.")
-    elif query.data == "clear_no":
-        await query.edit_message_text(text="✅ Отчет сохранен.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text
 
     if user_id not in user_data:
-        await update.message.reply_text("Нажмите /start.")
+        await update.message.reply_text("Нажмите /start для начала работы.")
         return
 
     user_type = user_data[user_id].get("type")
@@ -188,7 +172,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             order_str = (f"🟡 {order_data['name']} | 📍 Адрес: {order_data['address']} | "
                          f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | 💰 Сумма: 0")
             write_to_file(ORDERS_FILE, order_str)
-            await update.message.reply_text(f"✅ Заявка создана!\n\n{order_str}\n\nНе забудьте закрыть её после выполнения.")
+            try:
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"🚚 Новая заявка:\n{order_str}")
+            except Exception as e:
+                print(f"Не удалось отправить в личку: {e}")
+            await update.message.reply_text(f"✅ Заявка создана!\n\n{order_str}")
 
     # ЗАКРЫТИЕ ЗАЯВКИ
     elif user_type == "close":
@@ -199,7 +187,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 line_index, _ = open_orders[num - 1]
                 user_data[user_id]["selected_index"] = line_index
                 user_data[user_id]["type"] = "close_sum"
-                await update.message.reply_text("💰 Введите сумму, которую заработали за эту заявку:")
+                await update.message.reply_text("💰 Введите сумму, которую заработали:")
             else:
                 await update.message.reply_text("❌ Неверный номер.")
         except ValueError:
@@ -215,33 +203,41 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines[line_index] = new_line
             write_lines(ORDERS_FILE, lines)
             user_data.pop(user_id)
+            try:
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"✅ Заявка закрыта!\n{new_line.strip()}")
+            except Exception as e:
+                print(f"Не удалось отправить: {e}")
             await update.message.reply_text(f"✅ Заявка закрыта! Доход: {amount} руб.")
         except ValueError:
             await update.message.reply_text("❌ Введите число.")
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {e}")
 
-    # ВНЕСЕНИЕ ДЕНЕГ (Дата → Сумма → Комментарий)
+    # ВНЕСЕНИЕ ДЕНЕГ
     elif user_type == "income":
         if "date" not in user_data[user_id]:
             user_data[user_id]["date"] = text
             await update.message.reply_text("💰 Введите сумму внесения:")
         elif "sum" not in user_data[user_id]:
             user_data[user_id]["sum"] = text
-            await update.message.reply_text("📝 Введите комментарий (например: аванс, оплата наличными):")
+            await update.message.reply_text("📝 Введите комментарий:")
         else:
             user_data[user_id]["comment"] = text
             income_data = user_data.pop(user_id)
             income_str = (f"📅 {income_data['date']} | 💵 Внесено: {income_data['sum']} | "
                           f"📝 {income_data['comment']}")
             write_to_file(INCOME_FILE, income_str)
+            try:
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"💵 Внесение:\n{income_str}")
+            except Exception as e:
+                print(f"Не удалось отправить: {e}")
             await update.message.reply_text(f"✅ Деньги внесены!\n\n{income_str}")
 
-    # РАСХОДЫ (Дата → На что → Сумма)
+    # РАСХОДЫ
     elif user_type == "expense":
         if "date" not in user_data[user_id]:
             user_data[user_id]["date"] = text
-            await update.message.reply_text("🏷️ На что был расход? (например: Бензин, Запчасти, Еда):")
+            await update.message.reply_text("🏷️ На что был расход? (Бензин, Запчасти, Еда):")
         elif "what" not in user_data[user_id]:
             user_data[user_id]["what"] = text
             await update.message.reply_text("💰 Введите сумму расхода:")
@@ -251,6 +247,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             expense_str = (f"📅 {expense_data['date']} | 🏷️ На что: {expense_data['what']} | "
                            f"💰 Расход: {expense_data['expense']}")
             write_to_file(EXPENSES_FILE, expense_str)
+            try:
+                await context.bot.send_message(chat_id=MY_CHAT_ID, text=f"💰 Расход:\n{expense_str}")
+            except Exception as e:
+                print(f"Не удалось отправить: {e}")
             await update.message.reply_text(f"✅ Расход сохранен!\n\n{expense_str}")
 
 def main():
