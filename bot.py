@@ -4,8 +4,9 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 TOKEN = os.getenv("TOKEN")
 
-ORDERS_FILE = "zayavki.txt"   # Заявки
-EXPENSES_FILE = "rashody.txt" # Расходы
+ORDERS_FILE = "zayavki.txt"    # Заявки
+EXPENSES_FILE = "rashody.txt"  # Расходы
+INCOME_FILE = "income.txt"     # Внесение денежных средств
 
 def write_to_file(filename, text):
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -43,10 +44,11 @@ def write_lines(filename, lines):
 def calculate_totals():
     orders_text = read_file(ORDERS_FILE)
     expenses_text = read_file(EXPENSES_FILE)
+    income_text = read_file(INCOME_FILE)
     total_income = 0
     total_expenses = 0
 
-    # Доходы (только закрытые заявки 🟢)
+    # Доход от закрытых заявок 🟢
     if orders_text:
         for line in orders_text.splitlines():
             if "🟢" in line:
@@ -58,7 +60,18 @@ def calculate_totals():
                         except:
                             pass
 
-    # Расходы (все)
+    # Внесение денег (дополнительный доход)
+    if income_text:
+        for line in income_text.splitlines():
+            parts = line.split("|")
+            for part in parts:
+                if "Внесено" in part:
+                    try:
+                        total_income += int(part.split(":")[1].strip())
+                    except:
+                        pass
+
+    # Расходы
     if expenses_text:
         for line in expenses_text.splitlines():
             parts = line.split("|")
@@ -78,6 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🚚 Создать заявку", callback_data="new")],
         [InlineKeyboardButton("✅ Закрыть заявку", callback_data="close_order")],
+        [InlineKeyboardButton("💵 Внести деньги", callback_data="add_income")],
         [InlineKeyboardButton("💰 Заполнить расходы", callback_data="expenses")],
         [InlineKeyboardButton("📊 Отчет", callback_data="report")],
         [InlineKeyboardButton("🗑️ Очистить отчет", callback_data="clear")]
@@ -106,16 +120,25 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for num, (idx, line) in enumerate(open_orders, start=1):
             text += f"{num}. {line}\n\n"
         await query.edit_message_text(text=text)
+    elif query.data == "add_income":
+        user_data[user_id] = {"type": "income"}
+        await query.edit_message_text(text="📅 Введите дату внесения (например: 15.10):")
     elif query.data == "expenses":
         user_data[user_id] = {"type": "expense"}
         await query.edit_message_text(text="📅 Введите дату расхода (например: 15.10):")
     elif query.data == "report":
         orders = read_file(ORDERS_FILE)
         expenses = read_file(EXPENSES_FILE)
+        incomes = read_file(INCOME_FILE)
         total_income, total_expenses, profit = calculate_totals()
         await query.edit_message_text(
-            text=f"📊 Отчет:\n\n🚚 Заявки:\n{orders}\n\n💰 Расходы:\n{expenses}\n\n"
-                 f"💵 Итого заработано: {total_income}\n💸 Итого потрачено: {total_expenses}\n✅ Чистыми: {profit}"
+            text=f"📊 Отчет:\n\n"
+                 f"🚚 Заявки:\n{orders}\n\n"
+                 f"💵 Внесения:\n{incomes}\n\n"
+                 f"💰 Расходы:\n{expenses}\n\n"
+                 f"💵 Итого заработано: {total_income}\n"
+                 f"💸 Итого потрачено: {total_expenses}\n"
+                 f"✅ Чистыми: {profit}"
         )
     elif query.data == "clear":
         keyboard = [
@@ -125,7 +148,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text="⚠️ Удалить весь отчет?", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "clear_yes":
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        for f in [ORDERS_FILE, EXPENSES_FILE]:
+        for f in [ORDERS_FILE, EXPENSES_FILE, INCOME_FILE]:
             fp = os.path.join(base_dir, f)
             if os.path.exists(fp):
                 os.remove(fp)
@@ -197,6 +220,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Введите число.")
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {e}")
+
+    # ВНЕСЕНИЕ ДЕНЕГ (Дата → Сумма → Комментарий)
+    elif user_type == "income":
+        if "date" not in user_data[user_id]:
+            user_data[user_id]["date"] = text
+            await update.message.reply_text("💰 Введите сумму внесения:")
+        elif "sum" not in user_data[user_id]:
+            user_data[user_id]["sum"] = text
+            await update.message.reply_text("📝 Введите комментарий (например: аванс, оплата наличными):")
+        else:
+            user_data[user_id]["comment"] = text
+            income_data = user_data.pop(user_id)
+            income_str = (f"📅 {income_data['date']} | 💵 Внесено: {income_data['sum']} | "
+                          f"📝 {income_data['comment']}")
+            write_to_file(INCOME_FILE, income_str)
+            await update.message.reply_text(f"✅ Деньги внесены!\n\n{income_str}")
 
     # РАСХОДЫ (Дата → На что → Сумма)
     elif user_type == "expense":
