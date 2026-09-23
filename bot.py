@@ -7,7 +7,7 @@ TOKEN = os.getenv("TOKEN")
 # 👇 Ваш Telegram ID
 MY_CHAT_ID = 5370959021438146805
 
-# Пути к файлам (Railway Volume /data или локальная папка)
+# Пути к файлам
 DATA_DIR = "/data"
 if not os.path.exists(DATA_DIR):
     DATA_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -104,7 +104,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "new":
         user_data[user_id] = {"type": "order", "filled": []}
-        await query.edit_message_text(text="👤 Введите имя клиента:")
+        await query.edit_message_text(text="🔧 Какая техника? (стиральная машинка, холодильник, посудомойка, другое):")
     elif query.data == "close_order":
         lines = read_lines(ORDERS_FILE)
         open_orders = []
@@ -154,22 +154,31 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_type == "order":
         filled = user_data[user_id]["filled"]
         if len(filled) == 0:
+            user_data[user_id]["tech"] = text
+            user_data[user_id]["filled"].append("tech")
+            await update.message.reply_text("📋 Какая причина обращения? (например: не сливает воду, не морозит):")
+        elif len(filled) == 1:
+            user_data[user_id]["reason"] = text
+            user_data[user_id]["filled"].append("reason")
+            await update.message.reply_text("👤 Введите имя клиента:")
+        elif len(filled) == 2:
             user_data[user_id]["name"] = text
             user_data[user_id]["filled"].append("name")
             await update.message.reply_text("📍 Введите адрес:")
-        elif len(filled) == 1:
+        elif len(filled) == 3:
             user_data[user_id]["address"] = text
             user_data[user_id]["filled"].append("address")
             await update.message.reply_text("📞 Введите номер телефона:")
-        elif len(filled) == 2:
+        elif len(filled) == 4:
             user_data[user_id]["phone"] = text
             user_data[user_id]["filled"].append("phone")
             await update.message.reply_text("🕒 Введите время прибытия:")
-        elif len(filled) == 3:
+        elif len(filled) == 5:
             user_data[user_id]["time"] = text
             user_data[user_id]["filled"].append("time")
             order_data = user_data.pop(user_id)
-            order_str = (f"🟡 {order_data['name']} | 📍 Адрес: {order_data['address']} | "
+            order_str = (f"🟡 {order_data['tech']} | 📋 Причина: {order_data['reason']} | "
+                         f"👤 {order_data['name']} | 📍 Адрес: {order_data['address']} | "
                          f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | 💰 Сумма: 0")
             write_to_file(ORDERS_FILE, order_str)
             try:
