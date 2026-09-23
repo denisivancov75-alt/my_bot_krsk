@@ -40,16 +40,16 @@ def write_lines(filename, lines):
     with open(file_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-# Расчет итогов (только закрытые заявки)
 def calculate_totals():
     orders_text = read_file(ORDERS_FILE)
     expenses_text = read_file(EXPENSES_FILE)
     total_income = 0
     total_expenses = 0
 
+    # Доходы (только закрытые заявки 🟢)
     if orders_text:
         for line in orders_text.splitlines():
-            if "🟢" in line:  # только закрытые
+            if "🟢" in line:
                 parts = line.split("|")
                 for part in parts:
                     if "Сумма" in part:
@@ -58,6 +58,7 @@ def calculate_totals():
                         except:
                             pass
 
+    # Расходы (все)
     if expenses_text:
         for line in expenses_text.splitlines():
             parts = line.split("|")
@@ -89,10 +90,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if query.data == "new":
-        user_data[user_id] = {"type": "order"}
+        user_data[user_id] = {"type": "order", "filled": []}
         await query.edit_message_text(text="👤 Введите имя клиента:")
     elif query.data == "close_order":
-        # Показываем список открытых заявок
         lines = read_lines(ORDERS_FILE)
         open_orders = []
         for i, line in enumerate(lines):
@@ -102,38 +102,34 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(text="📭 Нет открытых заявок.")
             return
         user_data[user_id] = {"type": "close", "open_orders": open_orders}
-        text = "📋 Выберите заявку для закрытия (введите её номер):\n\n"
+        text = "📋 Выберите заявку для закрытия (введите номер):\n\n"
         for num, (idx, line) in enumerate(open_orders, start=1):
             text += f"{num}. {line}\n\n"
         await query.edit_message_text(text=text)
     elif query.data == "expenses":
         user_data[user_id] = {"type": "expense"}
-        await query.edit_message_text(text="📅 Введите дату расхода:")
+        await query.edit_message_text(text="📅 Введите дату расхода (например: 15.10):")
     elif query.data == "report":
         orders = read_file(ORDERS_FILE)
         expenses = read_file(EXPENSES_FILE)
         total_income, total_expenses, profit = calculate_totals()
         await query.edit_message_text(
-            text=f"📊 Отчет:\n\n"
-                 f"🚚 Заявки:\n{orders}\n\n"
-                 f"💰 Расходы:\n{expenses}\n\n"
-                 f"💵 Итого заработано: {total_income}\n"
-                 f"💸 Итого потрачено: {total_expenses}\n"
-                 f"✅ Чистыми: {profit}"
+            text=f"📊 Отчет:\n\n🚚 Заявки:\n{orders}\n\n💰 Расходы:\n{expenses}\n\n"
+                 f"💵 Итого заработано: {total_income}\n💸 Итого потрачено: {total_expenses}\n✅ Чистыми: {profit}"
         )
     elif query.data == "clear":
         keyboard = [
             [InlineKeyboardButton("✅ Да, удалить", callback_data="clear_yes")],
             [InlineKeyboardButton("❌ Нет, оставить", callback_data="clear_no")]
         ]
-        await query.edit_message_text(text="⚠️ Вы уверены, что хотите обнулить весь отчет?", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text(text="⚠️ Удалить весь отчет?", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "clear_yes":
         base_dir = os.path.dirname(os.path.abspath(__file__))
         for f in [ORDERS_FILE, EXPENSES_FILE]:
-            file_path = os.path.join(base_dir, f)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        await query.edit_message_text(text="✅ Отчет успешно обнулен.")
+            fp = os.path.join(base_dir, f)
+            if os.path.exists(fp):
+                os.remove(fp)
+        await query.edit_message_text(text="✅ Отчет обнулен.")
     elif query.data == "clear_no":
         await query.edit_message_text(text="✅ Отчет сохранен.")
 
@@ -142,69 +138,79 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if user_id not in user_data:
-        await update.message.reply_text("Пожалуйста, нажмите /start и выберите действие.")
+        await update.message.reply_text("Нажмите /start.")
         return
 
     user_type = user_data[user_id].get("type")
 
-    # ===== СОЗДАНИЕ ЗАЯВКИ =====
+    # СОЗДАНИЕ ЗАЯВКИ
     if user_type == "order":
-        # Заполняем поля по порядку
-        keys_order = ["name", "address", "phone", "time"]
-        prompts = {
-            "name": "📍 Введите адрес:",
-            "address": "📞 Введите номер телефона:",
-            "phone": "🕒 Введите время прибытия:",
-            "time": "💰 Введите сумму (можно указать 0):"
-        }
+        filled = user_data[user_id]["filled"]
+        if len(filled) == 0:
+            user_data[user_id]["name"] = text
+            user_data[user_id]["filled"].append("name")
+            await update.message.reply_text("📍 Введите адрес:")
+        elif len(filled) == 1:
+            user_data[user_id]["address"] = text
+            user_data[user_id]["filled"].append("address")
+            await update.message.reply_text("📞 Введите номер телефона:")
+        elif len(filled) == 2:
+            user_data[user_id]["phone"] = text
+            user_data[user_id]["filled"].append("phone")
+            await update.message.reply_text("🕒 Введите время прибытия:")
+        elif len(filled) == 3:
+            user_data[user_id]["time"] = text
+            user_data[user_id]["filled"].append("time")
+            order_data = user_data.pop(user_id)
+            order_str = (f"🟡 {order_data['name']} | 📍 Адрес: {order_data['address']} | "
+                         f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | 💰 Сумма: 0")
+            write_to_file(ORDERS_FILE, order_str)
+            await update.message.reply_text(f"✅ Заявка создана!\n\n{order_str}\n\nНе забудьте закрыть её после выполнения.")
 
-        current = user_data[user_id]
-        filled = [k for k in keys_order if k in current]
-
-        if len(filled) < 4:
-            key = keys_order[len(filled)]
-            current[key] = text
-            # Если следующее поле - time, то задаем следующий вопрос
-            filled = [k for k in keys_order if k in current]
-            if len(filled) < 4:
-                next_key = keys_order[len(filled)]
-                await update.message.reply_text(prompts[next_key])
-            else:
-                # Все поля заполнены - сохраняем заявку
-                order_data = user_data.pop(user_id)
-                order_str = (f"🟡 {order_data['name']} | 📍 Адрес: {order_data['address']} | "
-                             f"📞 Телефон: {order_data['phone']} | 🕒 Время: {order_data['time']} | "
-                             f"💰 Сумма: 0")
-                write_to_file(ORDERS_FILE, order_str)
-                await update.message.reply_text(f"✅ Заявка создана и открыта!\n\n{order_str}\n\nЕё нужно будет закрыть после выполнения.")
-
-    # ===== ЗАКРЫТИЕ ЗАЯВКИ =====
+    # ЗАКРЫТИЕ ЗАЯВКИ
     elif user_type == "close":
-        open_orders = user_data[user_id]["open_orders"]
         try:
             num = int(text.strip())
+            open_orders = user_data[user_id]["open_orders"]
             if 1 <= num <= len(open_orders):
-                line_index, line_text = open_orders[num - 1]
+                line_index, _ = open_orders[num - 1]
                 user_data[user_id]["selected_index"] = line_index
+                user_data[user_id]["type"] = "close_sum"
                 await update.message.reply_text("💰 Введите сумму, которую заработали за эту заявку:")
             else:
-                await update.message.reply_text("❌ Неверный номер. Попробуйте снова.")
+                await update.message.reply_text("❌ Неверный номер.")
         except ValueError:
             await update.message.reply_text("❌ Введите число.")
 
     elif user_type == "close_sum":
-        # Это состояние должно быть установлено перед запросом суммы
-        pass
+        try:
+            amount = int(text.strip())
+            line_index = user_data[user_id]["selected_index"]
+            lines = read_lines(ORDERS_FILE)
+            old_line = lines[line_index]
+            new_line = old_line.replace("🟡", "🟢").replace("Сумма: 0", f"Сумма: {amount}")
+            lines[line_index] = new_line
+            write_lines(ORDERS_FILE, lines)
+            user_data.pop(user_id)
+            await update.message.reply_text(f"✅ Заявка закрыта! Доход: {amount} руб.")
+        except ValueError:
+            await update.message.reply_text("❌ Введите число.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {e}")
 
-    # ===== РАСХОДЫ =====
+    # РАСХОДЫ (Дата → На что → Сумма)
     elif user_type == "expense":
         if "date" not in user_data[user_id]:
             user_data[user_id]["date"] = text
+            await update.message.reply_text("🏷️ На что был расход? (например: Бензин, Запчасти, Еда):")
+        elif "what" not in user_data[user_id]:
+            user_data[user_id]["what"] = text
             await update.message.reply_text("💰 Введите сумму расхода:")
         else:
             user_data[user_id]["expense"] = text
             expense_data = user_data.pop(user_id)
-            expense_str = f"📅 {expense_data['date']} | 💰 Расход: {expense_data['expense']}"
+            expense_str = (f"📅 {expense_data['date']} | 🏷️ На что: {expense_data['what']} | "
+                           f"💰 Расход: {expense_data['expense']}")
             write_to_file(EXPENSES_FILE, expense_str)
             await update.message.reply_text(f"✅ Расход сохранен!\n\n{expense_str}")
 
